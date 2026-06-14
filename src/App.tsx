@@ -1042,17 +1042,39 @@ function ContactForm() {
   useEffect(() => {
     if (inView) setSeen(true);
   }, [inView]);
+  // Clé Web3Forms — remplace la valeur ci-dessous par la clé reçue par email sur web3forms.com
+  const WEB3FORMS_KEY = '187201de-ec2e-4214-b724-21cfa0dc0f1c';
   const [form, setForm] = useState({name: '', company: '', email: '', message: ''});
+  const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm({...form, [k]: e.target.value});
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const body = `Nom : ${form.name}\nSociété : ${form.company}\nEmail : ${form.email}\n\n${form.message}`;
-    window.location.href =
-      'mailto:taylr.business@hotmail.com?subject=' +
-      encodeURIComponent(`Contact Taylr — ${form.company || form.name}`) +
-      '&body=' +
-      encodeURIComponent(body);
+    setStatus('sending');
+    try {
+      const res = await fetch('https://api.web3forms.com/submit', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', Accept: 'application/json'},
+        body: JSON.stringify({
+          access_key: WEB3FORMS_KEY,
+          subject: `Contact Taylr — ${form.company || form.name}`,
+          from_name: 'Site Taylr',
+          name: form.name,
+          company: form.company,
+          email: form.email,
+          message: form.message,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setStatus('sent');
+        setForm({name: '', company: '', email: '', message: ''});
+      } else {
+        setStatus('error');
+      }
+    } catch {
+      setStatus('error');
+    }
   };
   const input =
     'w-full rounded-xl px-4 py-3 text-[14px] bg-white/70 border border-black/10 outline-none focus:border-black/30 transition-colors';
@@ -1072,12 +1094,25 @@ function ContactForm() {
         <textarea required placeholder="Votre message…" rows={5} value={form.message} onChange={set('message')} className={input + ' resize-none'} />
         <button
           type="submit"
-          className="group inline-flex items-center justify-center gap-2.5 rounded-full px-7 py-3.5 text-[14px] font-semibold transition-all duration-300 cursor-pointer mt-2"
+          disabled={status === 'sending' || status === 'sent'}
+          className="group inline-flex items-center justify-center gap-2.5 rounded-full px-7 py-3.5 text-[14px] font-semibold transition-all duration-300 cursor-pointer mt-2 disabled:opacity-60 disabled:cursor-default"
           style={{background: INK, color: '#fff'}}
         >
-          Envoyer
-          <Send size={15} className="transition-transform duration-200 group-hover:translate-x-1" />
+          {status === 'sending' ? 'Envoi…' : status === 'sent' ? 'Message envoyé ✓' : 'Envoyer'}
+          {status === 'idle' && (
+            <Send size={15} className="transition-transform duration-200 group-hover:translate-x-1" />
+          )}
         </button>
+        {status === 'sent' && (
+          <p className="text-[13px] text-center" style={{color: MUTED}}>
+            Merci ! Nous revenons vers vous sous 24 h.
+          </p>
+        )}
+        {status === 'error' && (
+          <p className="text-[13px] text-center" style={{color: '#C0392B'}}>
+            Une erreur est survenue. Réessayez ou écrivez-nous à taylr.business@hotmail.com.
+          </p>
+        )}
       </form>
     </div>
   );
