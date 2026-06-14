@@ -1085,35 +1085,40 @@ function ContactForm() {
         <h2 className="text-[1.9rem] sm:text-[2.4rem] font-semibold tracking-tight">Parlons de votre projet.</h2>
         <p className="text-[14px] mt-3" style={{color: MUTED}}>Une démo, un devis, une question — nous répondons sous 24 h.</p>
       </div>
-      <form onSubmit={submit} className="glass-strong rounded-3xl p-7 sm:p-9 flex flex-col gap-4">
-        <div className="flex flex-col sm:flex-row gap-4">
-          <input required placeholder="Votre nom" value={form.name} onChange={set('name')} className={input} />
-          <input placeholder="Votre hôtel / société" value={form.company} onChange={set('company')} className={input} />
+      {status === 'sent' ? (
+        <div className="text-center py-16 sm:py-20">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full mb-6" style={{background: INK, color: '#fff'}}>
+            <Send size={20} />
+          </div>
+          <p className="text-[1.4rem] sm:text-[1.7rem] font-semibold tracking-tight">Merci, votre message a bien été envoyé.</p>
+          <p className="text-[14px] mt-3" style={{color: MUTED}}>Nous revenons vers vous sous 24 h.</p>
         </div>
-        <input required type="email" placeholder="Votre email" value={form.email} onChange={set('email')} className={input} />
-        <textarea required placeholder="Votre message…" rows={5} value={form.message} onChange={set('message')} className={input + ' resize-none'} />
-        <button
-          type="submit"
-          disabled={status === 'sending' || status === 'sent'}
-          className="group inline-flex items-center justify-center gap-2.5 rounded-full px-7 py-3.5 text-[14px] font-semibold transition-all duration-300 cursor-pointer mt-2 disabled:opacity-60 disabled:cursor-default"
-          style={{background: INK, color: '#fff'}}
-        >
-          {status === 'sending' ? 'Envoi…' : status === 'sent' ? 'Message envoyé ✓' : 'Envoyer'}
-          {status === 'idle' && (
-            <Send size={15} className="transition-transform duration-200 group-hover:translate-x-1" />
+      ) : (
+        <form onSubmit={submit} className="glass-strong rounded-3xl p-7 sm:p-9 flex flex-col gap-4">
+          <div className="flex flex-col sm:flex-row gap-4">
+            <input required placeholder="Votre nom" value={form.name} onChange={set('name')} className={input} />
+            <input placeholder="Votre hôtel / société" value={form.company} onChange={set('company')} className={input} />
+          </div>
+          <input required type="email" placeholder="Votre email" value={form.email} onChange={set('email')} className={input} />
+          <textarea required placeholder="Votre message…" rows={5} value={form.message} onChange={set('message')} className={input + ' resize-none'} />
+          <button
+            type="submit"
+            disabled={status === 'sending'}
+            className="group inline-flex items-center justify-center gap-2.5 rounded-full px-7 py-3.5 text-[14px] font-semibold transition-all duration-300 cursor-pointer mt-2 disabled:opacity-60 disabled:cursor-default"
+            style={{background: INK, color: '#fff'}}
+          >
+            {status === 'sending' ? 'Envoi…' : 'Envoyer'}
+            {status === 'idle' && (
+              <Send size={15} className="transition-transform duration-200 group-hover:translate-x-1" />
+            )}
+          </button>
+          {status === 'error' && (
+            <p className="text-[13px] text-center" style={{color: '#C0392B'}}>
+              Une erreur est survenue. Réessayez ou écrivez-nous à taylr.business@hotmail.com.
+            </p>
           )}
-        </button>
-        {status === 'sent' && (
-          <p className="text-[13px] text-center" style={{color: MUTED}}>
-            Merci ! Nous revenons vers vous sous 24 h.
-          </p>
-        )}
-        {status === 'error' && (
-          <p className="text-[13px] text-center" style={{color: '#C0392B'}}>
-            Une erreur est survenue. Réessayez ou écrivez-nous à taylr.business@hotmail.com.
-          </p>
-        )}
-      </form>
+        </form>
+      )}
     </div>
   );
 }
