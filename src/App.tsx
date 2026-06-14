@@ -1049,7 +1049,7 @@ function ContactForm() {
     e.preventDefault();
     const body = `Nom : ${form.name}\nSociété : ${form.company}\nEmail : ${form.email}\n\n${form.message}`;
     window.location.href =
-      'mailto:contact@taylr.studio?subject=' +
+      'mailto:taylr.business@hotmail.com?subject=' +
       encodeURIComponent(`Contact Taylr — ${form.company || form.name}`) +
       '&body=' +
       encodeURIComponent(body);
