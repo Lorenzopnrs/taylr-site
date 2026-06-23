@@ -87,6 +87,11 @@ function Slipper3DViewer({hideHint = false}: {hideHint?: boolean}) {
     mount.appendChild(renderer.domElement);
     renderer.domElement.style.touchAction = 'none';
     renderer.domElement.style.cursor = 'grab';
+    // Le canvas doit TOUJOURS remplir son cadre, quelle que soit la résolution
+    // interne (sinon, sur écran Retina dpr=2, il s'affiche à 2× et déborde).
+    renderer.domElement.style.display = 'block';
+    renderer.domElement.style.width = '100%';
+    renderer.domElement.style.height = '100%';
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
