@@ -1291,8 +1291,9 @@ function ContactForm() {
   useEffect(() => {
     if (inView) setSeen(true);
   }, [inView]);
-  // Clé Web3Forms — remplace la valeur ci-dessous par la clé reçue par email sur web3forms.com
-  const WEB3FORMS_KEY = '187201de-ec2e-4214-b724-21cfa0dc0f1c';
+  // Messages envoyés par FormSubmit (formsubmit.co) vers cette adresse. Au tout premier envoi,
+  // FormSubmit écrit à cette boîte pour faire confirmer le formulaire (lien « Activate Form »).
+  const CONTACT_EMAIL = 'taylr.business@hotmail.com';
   const [form, setForm] = useState({name: '', company: '', email: '', message: ''});
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
@@ -1301,21 +1302,21 @@ function ContactForm() {
     e.preventDefault();
     setStatus('sending');
     try {
-      const res = await fetch('https://api.web3forms.com/submit', {
+      const res = await fetch(`https://formsubmit.co/ajax/${CONTACT_EMAIL}`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json', Accept: 'application/json'},
         body: JSON.stringify({
-          access_key: WEB3FORMS_KEY,
-          subject: `Contact Taylr — ${form.company || form.name}`,
-          from_name: 'Site Taylr',
-          name: form.name,
-          company: form.company,
-          email: form.email,
-          message: form.message,
+          _subject: `Contact Taylr — ${form.company || form.name}`,
+          _replyto: form.email, // « Répondre » dans la boîte mail répond directement au visiteur
+          _template: 'table',
+          Nom: form.name,
+          Société: form.company,
+          Email: form.email,
+          Message: form.message,
         }),
       });
       const data = await res.json();
-      if (data.success) {
+      if (data.success === true || data.success === 'true') {
         setStatus('sent');
         setForm({name: '', company: '', email: '', message: ''});
       } else {
@@ -1363,7 +1364,7 @@ function ContactForm() {
           </button>
           {status === 'error' && (
             <p className="text-[13px] text-center" style={{color: '#C0392B'}}>
-              Une erreur est survenue. Réessayez ou écrivez-nous à taylr.business@hotmail.com.
+              Une erreur est survenue. Réessayez ou écrivez-nous à {CONTACT_EMAIL}.
             </p>
           )}
         </form>
