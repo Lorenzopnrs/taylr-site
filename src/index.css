@@ -54,6 +54,12 @@
 .reveal-3 { transition-delay: 280ms; }
 .reveal-4 { transition-delay: 380ms; }
 
+/* ───────── Vidéo agrandie : fond flouté qui apparaît + vidéo qui s'ouvre ───────── */
+@keyframes lb-fade { from { opacity: 0; } }
+@keyframes lb-zoom { from { opacity: 0; transform: scale(0.94); } }
+.lb-backdrop { animation: lb-fade 260ms ease both; }
+.lb-frame { animation: lb-zoom 420ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
 /* wordmark serif (typo des screenshots) */
 .wordmark { font-family: 'Playfair Display', Georgia, serif; }
 

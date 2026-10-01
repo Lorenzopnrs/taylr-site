@@ -7,6 +7,7 @@ import {
   Footprints,
   Gift,
   Image as ImageIcon,
+  Maximize2,
   Move,
   Package,
   Palette,
@@ -21,7 +22,11 @@ import {
   Sun,
   Type,
   Upload,
+  Volume2,
+  VolumeX,
+  X,
 } from 'lucide-react';
+import {createPortal} from 'react-dom';
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/examples/jsm/loaders/GLTFLoader.js';
 import {DRACOLoader} from 'three/examples/jsm/loaders/DRACOLoader.js';
@@ -70,10 +75,52 @@ function useInView<T extends HTMLElement>(): [React.RefObject<T | null>, boolean
   return [ref, inView];
 }
 
+/* ───────── passage FERMÉE ⇄ OUVERTE : « dissolution » (même effet que le module) ─────────
+   Les deux pantoufles partagent un shader : chaque point de la surface reçoit une valeur
+   (position pointe → talon + bruit). La fermée n'est dessinée que là où cette valeur dépasse
+   le seuil, l'ouverte partout ailleurs (masques complémentaires → jamais les deux au même
+   endroit). Le seuil balaie la pantoufle en partant de la pointe ; un liseré clair souligne le front. */
+type SlipperModel = 'fermee' | 'ouverte';
+const MORPH_DUR = 1400; // ms
+const CUT_FERMEE = -0.07; // seuil au repos : fermée entière, ouverte invisible
+const CUT_OUVERTE = 1.07; // seuil au repos : ouverte entière, fermée invisible
+const DISSOLVE_GLSL = `
+varying vec3 vTlPos;
+uniform float uTlCut; uniform float uTlTip; uniform float uTlLen; uniform float uTlW;
+float tlHash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float tlNoise(vec3 x){ vec3 i = floor(x); vec3 f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(tlHash(i), tlHash(i + vec3(1.0,0.0,0.0)), f.x), mix(tlHash(i + vec3(0.0,1.0,0.0)), tlHash(i + vec3(1.0,1.0,0.0)), f.x), f.y),
+             mix(mix(tlHash(i + vec3(0.0,0.0,1.0)), tlHash(i + vec3(1.0,0.0,1.0)), f.x), mix(tlHash(i + vec3(0.0,1.0,1.0)), tlHash(i + vec3(1.0,1.0,1.0)), f.x), f.y), f.z); }`;
+
+function patchDissolve(mat: THREE.Material, closed: boolean, uniforms: Record<string, THREE.IUniform>) {
+  mat.customProgramCacheKey = () => (closed ? 'tlDissolveC' : 'tlDissolveO');
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, uniforms);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vTlPos;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvTlPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\n' + DISSOLVE_GLSL)
+      .replace(
+        '#include <clipping_planes_fragment>',
+        [
+          '#include <clipping_planes_fragment>',
+          'float tlS = clamp((uTlTip - vTlPos.z) / uTlLen, 0.0, 1.0);', // 0 = pointe, 1 = talon
+          'float tlN = tlNoise(vTlPos * 7.0) * 0.6 + tlNoise(vTlPos * 21.0) * 0.4;', // grains (2 tailles)
+          'float tlD = tlS * (1.0 - uTlW) + tlN * uTlW - uTlCut;', // > 0 : côté fermée
+          closed ? 'if (tlD <= 0.0) discard;' : 'if (tlD > 0.0) discard;',
+          'float tlEdge = 1.0 - smoothstep(0.0, 0.03, abs(tlD));',
+        ].join('\n')
+      )
+      .replace('#include <dithering_fragment>', 'gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0), tlEdge * 0.6);\n#include <dithering_fragment>');
+  };
+}
+
 /* ───────── pantoufle 3D manipulable (OrbitControls) ───────── */
-function Slipper3DViewer({hideHint = false}: {hideHint?: boolean}) {
+function Slipper3DViewer({hideHint = false, model = 'fermee'}: {hideHint?: boolean; model?: SlipperModel}) {
   const mountRef = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
+  const showRef = useRef<(key: SlipperModel) => void>(() => {});
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
@@ -139,45 +186,104 @@ function Slipper3DViewer({hideHint = false}: {hideHint?: boolean}) {
     const loader = new GLTFLoader();
     loader.setDRACOLoader(draco);
     let disposed = false;
-    loader.load('/pantoufle-fermee.glb', (gltf) => {
-      if (disposed) return;
-      const model = gltf.scene;
-      const box = new THREE.Box3().setFromObject(model);
-      const size = box.getSize(new THREE.Vector3());
-      const center = box.getCenter(new THREE.Vector3());
-      model.position.sub(center);
-      const s = 3.2 / Math.max(size.x, size.y, size.z);
-      model.scale.setScalar(s);
-      model.position.multiplyScalar(s);
-      const nb = new THREE.Box3().setFromObject(model);
-      model.position.y -= nb.min.y; // posé sur le sol (y=0)
-      model.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (m.isMesh) {
-          m.castShadow = true;
-          m.receiveShadow = false;
-          // Tissu plus blanc : on éclaircit le matériau (le GLB rend gris).
-          const mat = m.material as THREE.MeshStandardMaterial;
-          if (mat && mat.isMeshStandardMaterial) {
-            mat.color = new THREE.Color('#FFFFFF');
-            if (mat.map) {
-              mat.emissive = new THREE.Color('#FFFFFF');
-              mat.emissiveMap = mat.map; // relève les zones claires (feutre) sans toucher la semelle noire
-              mat.emissiveIntensity = 0.28;
+
+    // ── fermée / ouverte : la fermée s'affiche d'abord, l'ouverte se charge ensuite en arrière-plan
+    const U = {uTlCut: {value: CUT_FERMEE}, uTlTip: {value: 1.6}, uTlLen: {value: 3.2}, uTlW: {value: 0.5}};
+    const models: Partial<Record<SlipperModel, THREE.Object3D>> = {};
+    const loading: Partial<Record<SlipperModel, boolean>> = {};
+    let shown: SlipperModel = 'fermee';
+    let want: SlipperModel = 'fermee';
+    let run: {from: SlipperModel; to: SlipperModel; t0: number} | null = null;
+
+    const finishMorph = () => {
+      if (!run) return;
+      models[run.from]!.visible = false;
+      U.uTlCut.value = run.to === 'ouverte' ? CUT_OUVERTE : CUT_FERMEE;
+      shown = run.to;
+      run = null;
+    };
+    const startMorph = () => {
+      finishMorph(); // un clic pendant l'animation : on termine d'abord
+      if (want === shown || !models[want] || !models[shown]) return;
+      models[want]!.visible = true;
+      run = {from: shown, to: want, t0: 0};
+    };
+
+    const load = (key: SlipperModel) => {
+      if (models[key] || loading[key]) return;
+      loading[key] = true;
+      loader.load(`/pantoufle-${key}.glb`, (gltf) => {
+        if (disposed) return;
+        const model = gltf.scene;
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        model.position.sub(center);
+        const s = 3.2 / Math.max(size.x, size.y, size.z);
+        model.scale.setScalar(s);
+        model.position.multiplyScalar(s);
+        const nb = new THREE.Box3().setFromObject(model);
+        model.position.y -= nb.min.y; // posé sur le sol (y=0)
+        model.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (m.isMesh) {
+            m.castShadow = true;
+            m.receiveShadow = false;
+            // Tissu plus blanc : on éclaircit le matériau (le GLB rend gris).
+            const mat = m.material as THREE.MeshStandardMaterial;
+            if (mat && mat.isMeshStandardMaterial) {
+              mat.color = new THREE.Color('#FFFFFF');
+              if (mat.map) {
+                mat.emissive = new THREE.Color('#FFFFFF');
+                mat.emissiveMap = mat.map; // relève les zones claires (feutre) sans toucher la semelle noire
+                mat.emissiveIntensity = 0.28;
+              }
+              mat.needsUpdate = true;
             }
-            mat.needsUpdate = true;
+            (Array.isArray(m.material) ? m.material : [m.material]).forEach((mt) => patchDissolve(mt, key === 'fermee', U));
           }
+        });
+        models[key] = model;
+        scene.add(model);
+        if (key === 'fermee') {
+          U.uTlTip.value = nb.max.z; // pointe → talon le long de z (même repère que le module)
+          U.uTlLen.value = nb.max.z - nb.min.z;
+          setReady(true);
+          // le sélecteur Fermée / Ouverte n'existe qu'à partir de 640 px (sm) : inutile de charger l'ouverte sur téléphone
+          if (window.matchMedia('(min-width: 640px)').matches) load('ouverte');
+        } else if (want !== shown) {
+          startMorph(); // l'ouverte a été demandée pendant son chargement
+        } else {
+          // préchauffage : une image avec l'ouverte (entièrement masquée) → shader compilé, pas d'à-coup au 1er clic
+          model.visible = true;
+          renderer.render(scene, camera);
+          model.visible = false;
         }
       });
-      scene.add(model);
-      setReady(true);
-    });
+    };
+    load('fermee');
+    showRef.current = (key) => {
+      want = key;
+      if (models[key]) startMorph();
+      else load(key);
+    };
 
     let raf = 0;
     const loop = () => {
       raf = requestAnimationFrame(loop);
       controls.update();
+      let done = false;
+      if (run) {
+        const now = performance.now();
+        if (!run.t0) run.t0 = now;
+        const t = Math.min(1, (now - run.t0) / MORPH_DUR);
+        const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; // lent → rapide → lent
+        const [a, b] = run.to === 'ouverte' ? [CUT_FERMEE, CUT_OUVERTE] : [CUT_OUVERTE, CUT_FERMEE];
+        U.uTlCut.value = a + (b - a) * e;
+        done = t >= 1;
+      }
       renderer.render(scene, camera);
+      if (done) finishMorph();
     };
     loop();
 
@@ -202,6 +308,9 @@ function Slipper3DViewer({hideHint = false}: {hideHint?: boolean}) {
       if (renderer.domElement.parentNode) mount.removeChild(renderer.domElement);
     };
   }, []);
+  useEffect(() => {
+    showRef.current(model);
+  }, [model]);
 
   return (
     <div className="relative w-full h-full">
@@ -219,6 +328,153 @@ function Slipper3DViewer({hideHint = false}: {hideHint?: boolean}) {
         </div>
       )}
     </div>
+  );
+}
+
+/* ───────── vidéo de présentation (hero) ─────────
+   Lecture auto en boucle SANS son (les navigateurs bloquent l'autoplay avec son).
+   « Activer le son » relance la vidéo depuis le début avec la musique.
+   « Agrandir » (ou clic sur la vidéo) l'ouvre en grand, page floutée derrière,
+   depuis le début et avec le son. Échap, clic à côté ou ✕ pour fermer. */
+const GLASS_BTN: React.CSSProperties = {
+  color: INK,
+  background: 'rgba(255,255,255,0.88)',
+  border: '1px solid rgba(0,0,0,0.08)',
+  boxShadow: '0 4px 14px rgba(28,33,48,0.10)',
+  WebkitBackdropFilter: 'blur(8px)',
+  backdropFilter: 'blur(8px)',
+};
+
+function HeroVideo() {
+  const ref = useRef<HTMLVideoElement>(null);
+  const bigRef = useRef<HTMLVideoElement>(null);
+  const [muted, setMuted] = useState(true);
+  const [big, setBig] = useState(false);
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    v.defaultMuted = true; // React ne pose pas l'attribut « muted » : on le force (autoplay iPhone)
+    v.muted = true;
+    v.play().catch(() => {});
+  }, []);
+  const toggleSound = () => {
+    const v = ref.current;
+    if (!v) return;
+    if (v.muted) v.currentTime = 0;
+    v.muted = !v.muted;
+    setMuted(v.muted);
+    v.play().catch(() => {});
+  };
+  const openBig = () => {
+    const v = ref.current;
+    if (v) {
+      v.muted = true;
+      v.pause();
+    }
+    setMuted(true);
+    setBig(true);
+  };
+  useEffect(() => {
+    if (!big) return;
+    // avec le son ; si le navigateur refuse, la vidéo attend sur son bouton lecture
+    bigRef.current?.play().catch(() => {});
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setBig(false);
+    };
+    window.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden'; // la page ne défile plus derrière
+    const small = ref.current;
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+      small?.play().catch(() => {}); // la petite vidéo reprend, sans le son
+    };
+  }, [big]);
+
+  return (
+    <>
+      <div
+        className="relative w-full aspect-video rounded-2xl overflow-hidden"
+        style={{background: '#F0F0EE', boxShadow: '0 24px 60px rgba(28,33,48,0.16), 0 2px 8px rgba(28,33,48,0.06)'}}
+      >
+        <video
+          ref={ref}
+          onClick={openBig}
+          className="block w-full h-full object-cover cursor-zoom-in"
+          src="/taylr-promo.mp4"
+          poster="/taylr-promo-poster.webp"
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="auto"
+        />
+        <div className="absolute bottom-2 right-2 sm:bottom-3 sm:right-3 flex items-center gap-2">
+          <button
+            onClick={toggleSound}
+            aria-label={muted ? 'Activer le son' : 'Couper le son'}
+            className="inline-flex items-center gap-2 rounded-full p-2 sm:px-3.5 sm:py-2 text-[12px] font-semibold cursor-pointer transition-transform duration-200 hover:-translate-y-0.5"
+            style={GLASS_BTN}
+          >
+            {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+            <span className="hidden sm:inline">{muted ? 'Activer le son' : 'Couper le son'}</span>
+          </button>
+          <button
+            onClick={openBig}
+            aria-label="Agrandir la vidéo"
+            title="Agrandir"
+            className="inline-flex items-center rounded-full p-2 cursor-pointer transition-transform duration-200 hover:-translate-y-0.5"
+            style={GLASS_BTN}
+          >
+            <Maximize2 size={15} />
+          </button>
+        </div>
+      </div>
+
+      {big &&
+        createPortal(
+          <div
+            className="lb-backdrop fixed inset-0 z-[120] flex items-center justify-center"
+            onClick={() => setBig(false)}
+            style={{
+              background: 'rgba(240,240,238,0.45)',
+              WebkitBackdropFilter: 'blur(18px) saturate(120%)',
+              backdropFilter: 'blur(18px) saturate(120%)',
+            }}
+          >
+            <div
+              className="lb-frame relative rounded-2xl overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: 'min(92vw, calc((100vh - 170px) * 16 / 9))',
+                aspectRatio: '16 / 9',
+                background: '#F0F0EE',
+                boxShadow: '0 40px 120px rgba(28,33,48,0.30), 0 4px 16px rgba(28,33,48,0.08)',
+              }}
+            >
+              <video
+                ref={bigRef}
+                className="block w-full h-full"
+                src="/taylr-promo.mp4"
+                poster="/taylr-promo-poster.webp"
+                controls
+                playsInline
+                preload="auto"
+              />
+            </div>
+            <button
+              onClick={() => setBig(false)}
+              aria-label="Fermer la vidéo"
+              className="fixed top-5 right-5 inline-flex items-center justify-center w-11 h-11 rounded-full cursor-pointer transition-transform duration-200 hover:rotate-90"
+              style={GLASS_BTN}
+            >
+              <X size={18} />
+            </button>
+          </div>,
+          document.body
+        )}
+    </>
   );
 }
 
@@ -782,7 +1038,7 @@ function ModulePreview() {
           />
           {/* produit 3D, flottant dans le champ */}
           <div className="absolute inset-0">
-            <SlipperViewerLite />
+            <SlipperViewerLite model={model} />
           </div>
 
           {/* barre du haut flottante */}
@@ -859,8 +1115,8 @@ function ModulePreview() {
 }
 
 /* Variante allégée du viewer pour l'aperçu (fond crème géré par la scène) */
-function SlipperViewerLite() {
-  return <Slipper3DViewer hideHint />;
+function SlipperViewerLite({model}: {model: SlipperModel}) {
+  return <Slipper3DViewer hideHint model={model} />;
 }
 
 /* ───────── Section fonctionnalité (texte + démo, alternés) ───────── */
@@ -951,7 +1207,7 @@ export default function App() {
       <Loader />
       <Navbar active={active} go={go} />
 
-      {/* ───────── HERO : explicatif gauche · pantoufle 3D manipulable droite ───────── */}
+      {/* ───────── HERO : explicatif gauche · vidéo de présentation droite ───────── */}
       <header id="home" className="relative min-h-[80vh] flex items-center">
         <div className="max-w-6xl mx-auto w-full px-6 sm:px-10 grid lg:grid-cols-2 gap-10 lg:gap-6 items-center pt-20 pb-6">
           <div className="max-w-xl">
@@ -979,20 +1235,8 @@ export default function App() {
               <ArrowRight size={16} className="transition-transform duration-200 group-hover:translate-x-1" />
             </button>
           </div>
-          <div className={`reveal reveal-2 ${heroSeen ? 'in' : ''} relative h-[420px] sm:h-[520px] w-full`}>
-            {/* halo clair derrière le produit → le fait ressortir (comme le module) */}
-            <div
-              className="absolute left-1/2 top-[46%] -translate-x-1/2 -translate-y-1/2 pointer-events-none"
-              style={{width: '78%', height: '64%', borderRadius: '50%', background: 'radial-gradient(ellipse at center, rgba(255,255,255,0.95), rgba(255,255,255,0) 70%)', filter: 'blur(10px)'}}
-            />
-            {/* ombre portée large et très floue */}
-            <div
-              className="absolute left-1/2 bottom-[14%] -translate-x-1/2 pointer-events-none"
-              style={{width: '64%', height: '15%', borderRadius: '50%', background: 'rgba(28,33,48,0.20)', filter: 'blur(50px)'}}
-            />
-            <div className="relative h-full w-full">
-              <Slipper3DViewer />
-            </div>
+          <div className={`reveal reveal-2 ${heroSeen ? 'in' : ''} relative w-full`}>
+            <HeroVideo />
           </div>
         </div>
       </header>
